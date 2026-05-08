@@ -468,7 +468,7 @@ def _fill_defaults_for_nested_field(
     """Fill missing keys in a partial nested dict from the field's defaults.
 
     When Pydantic's env_nested_delimiter splits an env var like
-    ``DERIVER_MODEL_CONFIG__THINKING_BUDGET_TOKENS=2048`` it produces
+    ``DERIVER_MODEL_CONFIG__THINKING_BUDGET_TOKENS=*** it produces
     ``{"MODEL_CONFIG": {"THINKING_BUDGET_TOKENS": 2048}}``.  Without merging
     that partial dict would fail validation because required keys like
     ``model`` and ``transport`` are missing.  This helper fills them from
@@ -836,7 +836,7 @@ def _default_dialectic_levels() -> dict[ReasoningLevel, DialecticLevelSettings]:
         "minimal": DialecticLevelSettings(
             MODEL_CONFIG=_default_model_config(),
             MAX_TOOL_ITERATIONS=1,
-            MAX_OUTPUT_TOKENS=250,
+            MAX_OUTPUT_TOKENS=***
             TOOL_CHOICE="auto",
         ),
         "low": DialecticLevelSettings(
@@ -1039,63 +1039,7 @@ class CacheSettings(HonchoSettings):
     model_config = SettingsConfigDict(env_prefix="CACHE_", extra="ignore")  # pyright: ignore
 
     ENABLED: bool = False
-    URL: str = "redis://localhost:6379/0?suppress=true"
-    NAMESPACE: str | None = None
-    DEFAULT_TTL_SECONDS: Annotated[int, Field(default=300, ge=1, le=86_400)] = (
-        300  # how long to keep items in cache
-    )
-
-    DEFAULT_LOCK_TTL_SECONDS: Annotated[int, Field(default=5, ge=1, le=86_400)] = (
-        5  # how long to hold a lock on a resource when fetching DB after cache miss
-    )
-
-
-class SurprisalSettings(BaseModel):
-    """Settings for tree-based surprisal sampling during dreams."""
-
-    ENABLED: bool = False
-
-    # Tree configuration
-    TREE_TYPE: Literal[
-        "kdtree", "balltree", "rptree", "covertree", "lsh", "graph", "prototype"
-    ] = "kdtree"
-    TREE_K: Annotated[int, Field(default=5, gt=0, le=20)] = 5  # k for kNN-based trees
-
-    # Sampling strategy
-    SAMPLING_STRATEGY: Literal["recent", "random", "all"] = "recent"
-    SAMPLE_SIZE: Annotated[int, Field(default=200, gt=0, le=2000)] = 200
-
-    # Surprisal filtering (normalized scores: 0.0 = lowest, 1.0 = highest)
-    TOP_PERCENT_SURPRISAL: Annotated[float, Field(default=0.10, gt=0.0, le=1.0)] = (
-        0.10  # Top 10% of observations
-    )
-    # Hybrid mode: min high-surprisal observations to replace standard questions
-    MIN_HIGH_SURPRISAL_FOR_REPLACE: Annotated[int, Field(default=10, gt=0)] = 10
-
-    # Observation level filtering
-    INCLUDE_LEVELS: list[str] = ["explicit", "deductive"]
-
-
-class DreamSettings(HonchoSettings):
-    model_config = SettingsConfigDict(  # pyright: ignore
-        env_prefix="DREAM_", env_nested_delimiter="__", extra="ignore"
-    )
-
-    ENABLED: bool = True
-    DOCUMENT_THRESHOLD: Annotated[int, Field(default=50, gt=0, le=1000)] = 50
-    IDLE_TIMEOUT_MINUTES: Annotated[int, Field(default=60, gt=0, le=1440)] = 60
-    MIN_HOURS_BETWEEN_DREAMS: Annotated[int, Field(default=8, gt=0, le=72)] = 8
-    ENABLED_TYPES: list[str] = ["omni"]
-
-    # Agent iteration limit - increased for extended reasoning workflow
-    MAX_TOOL_ITERATIONS: Annotated[int, Field(default=20, gt=0, le=50)] = 20
-
-    # Token limit for get_recent_history tool within the agent
-    HISTORY_TOKEN_LIMIT: Annotated[int, Field(default=16_384, gt=0, le=200_000)] = (
-        16_384
-    )
-
-    @staticmethod
+    URL: str = "redis://localhost:***@staticmethod
     def _DEDUCTION_MODEL_CONFIG_DEFAULT() -> ConfiguredModelSettings:
         # Minimal default; extra knobs would merge into env/TOML overrides.
         return ConfiguredModelSettings(

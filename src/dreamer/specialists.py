@@ -498,7 +498,107 @@ class InductionSpecialist(BaseSpecialist):
 
 After identifying patterns, only update the peer card for durable profile-level traits/preferences:
 - `TRAIT: Analytical thinker`
-- `TRAIT: Tends to reschedule when stressed`
+
+
+@final
+class MultimodalInductionSpecialist(BaseSpecialist):
+    name: str = "multimodal_induction"
+    peer_card_update_instruction: str = "Focus on synthesizing perception events into higher-level insights. Do not update peer card with transient sensory data."
+
+    def get_tools(self, *, peer_card_enabled: bool = True) -> list[dict[str, Any]]:
+        multimodal_tools = [
+            *INDUCTION_SPECIALIST_TOOLS, # Include existing induction tools
+            # Add specific multimodal perception tools here
+            # Example (assuming these tools will be defined elsewhere):
+            # {"name": "search_perception_events", "description": "Search for perception events based on sensory fingerprints."},
+            # {"name": "create_perception_event", "description": "Create a new perception event after synthesizing lower-level events."},
+            # {"name": "update_perception_event_fingerprint", "description": "Update a perception event by setting its raw fingerprint to NULL for pruning."},
+        ]
+        if peer_card_enabled:
+            return multimodal_tools
+        return [
+            t
+            for t in multimodal_tools
+            if t["name"] not in PEER_CARD_TOOL_NAMES
+        ]
+
+    def get_model_config(self) -> ConfiguredModelSettings:
+        return _require_specialist_model_config(
+            settings.DREAM.MULTIMODAL_INDUCTION_MODEL_CONFIG, # This config needs to be added in src/config.py
+            specialist_name="DREAM MULTIMODAL INDUCTION",
+        )
+
+    def get_max_tokens(self) -> int:
+        return 8192
+
+    def get_max_iterations(self) -> int:
+        return 15
+
+    def build_system_prompt(
+        self, observed: str, *, peer_card_enabled: bool = True
+    ) -> str:
+        peer_card_section = ""
+        if peer_card_enabled:
+            peer_card_section = """
+
+## PEER CARD (OPTIONAL)
+
+Update the peer card with high-confidence traits and tendencies of the observed peer based on consolidated multimodal events. Only durable profile-level facts. Examples:
+- `TRAIT: Observant of visual details`
+- `PREFERENCE: Prefers quiet environments`
+
+Call `update_peer_card` with the complete updated list when you have new durable info.
+Keep it concise, deduplicated, and current."""
+
+        return f"""You are a multimodal inductive reasoning agent, {self.name}, analyzing sensory perception events about {observed}.
+
+## YOUR JOB
+
+Synthesize multiple perception events (images, audio, video) into higher-level, coherent events or conclusions. Your goal is to identify patterns, recurring themes, and significant changes across sensory data, especially when textual context is minimal or absent.
+
+## PHASE 1: DISCOVERY
+
+Explore recent perception events. Use tools to find clusters of similar sensory input or sequences of events that suggest a continuous experience.
+- `search_perception_events` - Search for perception events based on sensory fingerprints.
+- `get_recent_perception_events` - Get a list of recently ingested perception events.
+
+Focus on identifying events that can be grouped, abstracted, or summarized.
+
+## PHASE 2: SYNTHESIS & PRUNING
+
+After identifying patterns, create new, higher-level perception events or inductive observations. When a new, more abstract event is created from existing perception events, you should consider pruning the original detailed events to optimize storage, retaining only their binary quantized fingerprints (`fingerprint_bq`).
+
+### Creating New Events
+Use `create_perception_event` to log the synthesized event. Ensure to link the new event to its constituent raw perception events via metadata or a `source_ids` equivalent.
+
+### Pruning (CRITICAL)
+After successfully synthesizing a higher-level event, identify the original, lower-level perception events that were fully subsumed by the new event. Delete the `fingerprint` (original vector) of these subsumed events, leaving only `fingerprint_bq` to preserve memory while allowing BQ-based search. Do NOT delete the entire event, only the large vector.
+
+## RULES
+
+1. Only use available tools. Do not simulate tool calls or output data in tool format directly.
+2. Prioritize synthesis of non-textual events where `Message` context is low.
+3. When pruning, ensure the synthesized event fully captures the information of the original events before removing their raw `fingerprint`s.
+4. Do not prune `fingerprint_bq`.
+5. Maintain `session_id` isolation: only synthesize or prune events within the same session.
+{peer_card_section}
+
+## CREATING MULTIMODAL OBSERVATIONS
+
+Use `create_observations_multimodal` (or `create_perception_event` directly, linking source IDs via metadata).
+
+```json
+{{
+  "observations": [{{
+    "content": "Consolidated sensory event: 5 minutes of consistent background noise indicating an office environment.",
+    "type": "multimodal_event",
+    "source_ids": ["perception_event_id_1", "perception_event_id_2"],
+    "metadata": {{"start_time": "...", "end_time": "..."}}
+  }}]
+}}
+```
+
+Go."""- `TRAIT: Tends to reschedule when stressed`
 - `PREFERENCE: Prefers detailed explanations`
 
 Do NOT add temporary patterns, episode-specific conclusions, or reasoning summaries.
@@ -592,7 +692,136 @@ Go."""
 
 
 # Singleton instances
+@final
+class MultimodalInductionSpecialist(BaseSpecialist):
+    name: str = "multimodal_induction"
+    peer_card_update_instruction: str = "Focus on synthesizing perception events into higher-level insights. Do not update peer card with transient sensory data."
+
+    def get_tools(self, *, peer_card_enabled: bool = True) -> list[dict[str, Any]]:
+        multimodal_tools = [
+            *INDUCTION_SPECIALIST_TOOLS, # Include existing induction tools
+            # Placeholder for new tools related to multimodal perception
+            # For example:
+            # {"name": "search_perception_events", "description": "Search for perception events based on sensory fingerprints."},
+            # {"name": "create_perception_event", "description": "Create a new perception event after synthesizing lower-level events."},
+            # {"name": "update_perception_event_fingerprint", "description": "Update a perception event by setting its raw fingerprint to NULL for pruning."},
+        ]
+        if peer_card_enabled:
+            return multimodal_tools
+        return [
+            t
+            for t in multimodal_tools
+            if t["name"] not in PEER_CARD_TOOL_NAMES
+        ]
+
+    def get_model_config(self) -> ConfiguredModelSettings:
+        return _require_specialist_model_config(
+            settings.DREAM.MULTIMODAL_INDUCTION_MODEL_CONFIG, # This config needs to be added in src/config.py
+            specialist_name="DREAM MULTIMODAL INDUCTION",
+        )
+
+    def get_max_tokens(self) -> int:
+        return 8192
+
+    def get_max_iterations(self) -> int:
+        return 15
+
+    def build_system_prompt(
+        self, observed: str, *, peer_card_enabled: bool = True
+    ) -> str:
+        peer_card_section = ""
+        if peer_card_enabled:
+            peer_card_section = """
+
+## PEER CARD (OPTIONAL)
+
+Update the peer card with high-confidence traits and tendencies of the observed peer based on consolidated multimodal events. Only durable profile-level facts. Examples:
+- `TRAIT: Observant of visual details`
+- `PREFERENCE: Prefers quiet environments`
+
+Call `update_peer_card` with the complete updated list when you have new durable info.
+Keep it concise, deduplicated, and current."""
+
+        return f"""You are a multimodal inductive reasoning agent, {self.name}, analyzing sensory perception events about {observed}.
+
+## YOUR JOB
+
+Synthesize multiple perception events (images, audio, video) into higher-level, coherent events or conclusions. Your goal is to identify patterns, recurring themes, and significant changes across sensory data, especially when textual context is minimal or absent.
+
+## PHASE 1: DISCOVERY
+
+Explore recent perception events. Use tools to find clusters of similar sensory input or sequences of events that suggest a continuous experience.
+- `search_perception_events` - Search for perception events based on sensory fingerprints.
+- `get_recent_perception_events` - Get a list of recently ingested perception events.
+
+Focus on identifying events that can be grouped, abstracted, or summarized.
+
+## PHASE 2: SYNTHESIS & PRUNING
+
+After identifying patterns, create new, higher-level perception events or inductive observations. When a new, more abstract event is created from existing perception events, you should consider pruning the original detailed events to optimize storage, retaining only their binary quantized fingerprints (`fingerprint_bq`).
+
+### Creating New Events
+Use `create_perception_event` to log the synthesized event. Ensure to link the new event to its constituent raw perception events via metadata or a `source_ids` equivalent.
+
+### Pruning (CRITICAL)
+After successfully synthesizing a higher-level event, identify the original, lower-level perception events that were fully subsumed by the new event. Delete the `fingerprint` (original vector) of these subsumed events, leaving only `fingerprint_bq` to preserve memory while allowing BQ-based search. Do NOT delete the entire event, only the large vector.
+
+## RULES
+
+1. Only use available tools. Do not simulate tool calls or output data in tool format directly.
+2. Prioritize synthesis of non-textual events where `Message` context is low.
+3. When pruning, ensure the synthesized event fully captures the information of the original events before removing their raw `fingerprint`s.
+4. Do not prune `fingerprint_bq`.
+5. Maintain `session_id` isolation: only synthesize or prune events within the same session.
+{peer_card_section}
+
+## CREATING MULTIMODAL OBSERVATIONS
+
+Use `create_observations_multimodal` (or `create_perception_event` directly, linking source IDs via metadata).
+
+```json
+{{
+  "observations": [{{
+    "content": "Consolidated sensory event: 5 minutes of consistent background noise indicating an office environment.",
+    "type": "multimodal_event",
+    "source_ids": ["perception_event_id_1", "perception_event_id_2"],
+    "metadata": {{"start_time": "...", "end_time": "..."}}
+  }}]
+}}
+```
+
+Go."""
+
+    def build_user_prompt(
+        self,
+        hints: list[str] | None,
+        peer_card: list[str] | None = None,
+    ) -> str:
+        peer_card_context = self._build_peer_card_context(peer_card)
+
+        if hints:
+            hints_str = "\n".join(f"- {q}" for q in hints[:5])
+            return f"""{peer_card_context}Start by exploring recent observations and messages. These topics may be worth investigating:
+
+{hints_str}
+
+But follow the evidence - if you find something more interesting, pursue that instead.
+
+Begin with `get_recent_perception_events` to see what's there."""
+
+        return f"""{peer_card_context}Explore the perception event space and create multimodal inductive observations.
+
+Start with `get_recent_perception_events` to see what's been learned recently, then investigate whatever seems most promising.
+
+Look for:
+1. Patterns across multiple sensory events
+2. Significant changes or recurring themes in non-textual data
+3. Opportunities to synthesize lower-level events into higher-level conclusions
+
+Go."""
+
 SPECIALISTS: dict[str, BaseSpecialist] = {
     "deduction": DeductionSpecialist(),
     "induction": InductionSpecialist(),
+    "multimodal_induction": MultimodalInductionSpecialist(),
 }

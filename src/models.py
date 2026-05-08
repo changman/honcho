@@ -11,6 +11,7 @@ from sqlalchemy import (
     CheckConstraint,
     Column,
     DateTime,
+    Float,
     ForeignKey,
     ForeignKeyConstraint,
     Identity,
@@ -24,6 +25,7 @@ from sqlalchemy.dialects.postgresql import JSONB, TEXT
 from sqlalchemy.orm import Mapped, MappedColumn, mapped_column, relationship
 from sqlalchemy.sql import func
 from typing_extensions import override
+
 
 from src.utils.types import DocumentLevel, TaskType, VectorSyncState
 
@@ -187,6 +189,7 @@ class Session(Base):
         "Peer", secondary=session_peers_table, back_populates="sessions"
     )
     messages = relationship("Message", back_populates="session")
+    perception_events = relationship("PerceptionEvent", back_populates="session", cascade="all, delete, delete-orphan")
 
     __table_args__ = (
         UniqueConstraint("name", "workspace_name"),
@@ -229,6 +232,9 @@ class Message(Base):
     # Note: Foreign key relationships established via composite ForeignKeyConstraint below
     peer_name: Mapped[str] = mapped_column(TEXT, index=True)
     workspace_name: Mapped[str] = mapped_column(TEXT, index=True)
+    perception_event_id: Mapped[str | None] = mapped_column(
+        ForeignKey("perception_events.id"), nullable=True, index=True
+    )
 
     session = relationship("Session", back_populates="messages")
 
@@ -329,6 +335,47 @@ class MessageEmbedding(Base):
 
 
 @final
+class PerceptionEvent(Base):
+    __tablename__: str = "perception_events"
+    id: Mapped[str] = mapped_column(TEXT, default=generate_nanoid, primary_key=True)
+    session_id: Mapped[str] = mapped_column(
+        ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    source_type: Mapped[str] = mapped_column(TEXT, nullable=False)
+    salience_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    fingerprint: MappedColumn[Any] = mapped_column(Vector(512), nullable=True)
+    fingerprint_bq: Mapped[str | None] = mapped_column(TEXT, nullable=True)
+    metadata_: Mapped[dict[str, Any]] = mapped_column(
+        "metadata", JSONB, default=dict, server_default=text("'{}'::jsonb")
+    )
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+
+    session = relationship("Session", back_populates="perception_events")
+
+    __table_args__ = (
+        CheckConstraint("length(id) = 21", name="perception_event_id_length"),
+        CheckConstraint("id ~ '^[A-Za-z0-9_-]+$'", name="perception_event_id_format"),
+        Index(
+            "ix_perception_events_fingerprint_bq",
+            text("fingerprint_bq"),
+            postgresql_using="gin",
+        ),
+        Index(
+            "ix_perception_events_fingerprint_hnsw",
+            "fingerprint",
+            postgresql_using="hnsw",
+            postgresql_with={"m": 16, "ef_construction": 64},
+            postgresql_ops={"fingerprint": "vector_cosine_ops"},
+        ),
+    )
+
+    def __repr__(self) -> str:
+        return f"PerceptionEvent(id={self.id}, session_id={self.session_id}, source_type={self.source_type}, salience_score={self.salience_score})"
+
+
+@final
 class Collection(Base):
     __tablename__: str = "collections"
 
@@ -402,6 +449,9 @@ class Document(Base):
     session_name: Mapped[str | None] = mapped_column(TEXT, nullable=True, index=True)
     deleted_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, index=True, default=None
+    )
+    perception_event_id: Mapped[str | None] = mapped_column(
+        ForeignKey("perception_events.id"), nullable=True, index=True
     )
 
     # Vector sync state tracking
