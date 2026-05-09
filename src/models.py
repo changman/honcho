@@ -372,11 +372,9 @@ class PerceptionEvent(Base):
     __table_args__ = (
         CheckConstraint("length(id) = 21", name="perception_event_id_length"),
         CheckConstraint("id ~ '^[A-Za-z0-9_-]+$'", name="perception_event_id_format"),
-        Index(
-            "ix_perception_events_fingerprint_bq",
-            text("fingerprint_bq"),
-            postgresql_using="gin",
-        ),
+        # Note: fingerprint_bq BQ search is handled Python-side via Hamming distance.
+        # No DB-level index is needed for TEXT-based Hamming — a GIN index here would
+        # require pg_trgm (trigram search), which is a different algorithm entirely.
         Index(
             "ix_perception_events_fingerprint_hnsw",
             "fingerprint",

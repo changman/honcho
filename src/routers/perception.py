@@ -73,8 +73,20 @@ async def ingest_perception(
     # if event.salience_score > 0.7:
     #     background_tasks.add_task(trigger_perception_reasoning, new_event)
 
-    response = schemas.PerceptionEventResponse.model_validate(new_event)
-    return response.model_copy(update={"is_state_change": is_state_change})
+    return schemas.PerceptionEventResponse(
+        id=new_event.id,
+        session_id=new_event.session_id,
+        source_type=new_event.source_type,
+        salience_score=new_event.salience_score,
+        fingerprint_bq=new_event.fingerprint_bq,
+        metadata=new_event.metadata_,
+        created_at=new_event.created_at,
+        captured_at=new_event.captured_at,
+        segment_id=new_event.segment_id,
+        is_segment_start=new_event.is_segment_start,
+        is_segment_end=new_event.is_segment_end,
+        is_state_change=is_state_change,
+    )
 
 
 @router.post("/search", response_model=List[schemas.PerceptionEventOut])
