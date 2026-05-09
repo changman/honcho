@@ -1,65 +1,76 @@
+import logging
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.crud import perception as crud_perception
-from src.dependencies import get_db
-from src.schemas import PerceptionIngestRequest, PerceptionEventOut, PerceptionSearchRequest
-from src.models import Document, Message
+from src import crud, schemas
+from src.dependencies import db
+from src.exceptions import ResourceNotFoundException
+from src.security import require_auth
 
-router = APIRouter()
+logger = logging.getLogger(__name__)
 
-
-@router.post(
-    "/v1/perception/ingest",
-    response_model=PerceptionEventOut,
-    status_code=status.HTTP_201_CREATED,
+router = APIRouter(
+    prefix="/workspaces/{workspace_id}/sessions/{session_id}/perception",
+    tags=["perception"],
+    dependencies=[
+        Depends(require_auth(workspace_name="workspace_id", session_name="session_id"))
+    ],
 )
-async def ingest_perception_event(
-    event_data: PerceptionIngestRequest, db: Session = Depends(get_db)
+
+
+@router.post("/ingest", response_model=schemas.PerceptionEventResponse, status_code=201)
+async def ingest_perception(
+    background_tasks: BackgroundTasks,
+    event: schemas.PerceptionIngestRequest,
+    workspace_id: str = Path(...),
+    session_id: str = Path(...),
+    db: AsyncSession = db,
 ):
-    # 1단계: PerceptionEvent 행 생성
-    db_event = crud_perception.create_perception_event(db=db, event_data=event_data)
+    """Ingest a new perception event (image/audio fingerprint)."""
+    if event.session_id != session_id:
+        raise HTTPException(status_code=400, detail="session_id in body does not match URL")
 
-    # 2단계: Salience가 높을 경우 큐(Redis)에 'Active Reasoning' 작업 적재 (TODO: implement Redis queue)
-    if db_event.salience_score > 0.7:  # Example threshold
-        # Here you would typically add a task to a Redis queue
-        # For now, we'll just log this intention
-        print(f"High salience event {db_event.id} detected. Adding to Active Reasoning queue.")
+    new_event = await crud.create_perception_event(db, event=event, workspace_name=workspace_id)
 
-    # Retrieve associated documents and messages to populate PerceptionEventOut
-    associated_documents_ids = [doc.id for doc in db.query(Document).filter(Document.perception_event_id == db_event.id).all()]
-    associated_messages_ids = [msg.public_id for msg in db.query(Message).filter(Message.perception_event_id == db_event.id).all()]
+    # High-salience events will trigger background reasoning in Phase 4
+    # if event.salience_score > 0.7:
+    #     background_tasks.add_task(trigger_perception_reasoning, new_event)
 
-    # Re-fetch the event with relationships if needed, or construct the output schema directly
-    # For simplicity, constructing directly using the IDs fetched above
-    return PerceptionEventOut(
-        id=str(db_event.id),
-        session_id=str(db_event.session_id),
-        source_type=db_event.source_type,
-        salience_score=db_event.salience_score,
-        fingerprint_bq=db_event.fingerprint_bq,
-        metadata=db_event.metadata_,
-        created_at=db_event.created_at,
-        associated_documents=associated_documents_ids, # These will be IDs for now
-        associated_messages=associated_messages_ids, # These will be IDs for now
+    return schemas.PerceptionEventResponse.model_validate(new_event)
+
+
+@router.post("/search", response_model=List[schemas.PerceptionEventOut])
+async def search_perception(
+    request: schemas.PerceptionSearchRequest,
+    workspace_id: str = Path(...),
+    session_id: str = Path(...),
+    db: AsyncSession = db,
+):
+    """Search for perception events similar to the query fingerprint (Phase 1: placeholder BQ search)."""
+    events = await crud.search_perception_events(
+        db,
+        query_fingerprint_bq=None,  # Phase 1 will replace with real BQ conversion
+        session_id=session_id,
+        top_k=request.top_k,
     )
 
+    results = []
+    for event in events:
+        associated = await crud.get_associated_data(db, event.id)
+        results.append(
+            schemas.PerceptionEventOut(
+                id=event.id,
+                session_id=event.session_id,
+                source_type=event.source_type,
+                salience_score=event.salience_score,
+                fingerprint_bq=event.fingerprint_bq,
+                metadata=event.metadata_,
+                created_at=event.created_at,
+                associated_document_ids=[d.id for d in associated["documents"]],
+                associated_message_ids=[m.public_id for m in associated["messages"]],
+            )
+        )
 
-@router.post(
-    "/v1/perception/search",
-    response_model=List[PerceptionEventOut],
-)
-async def search_perception_events_api(
-    search_data: PerceptionSearchRequest, db: Session = Depends(get_db)
-):
-    perception_events = crud_perception.search_perception_events(
-        db=db,
-        query_fingerprint=search_data.query_fingerprint,
-        session_id=search_data.session_id,
-        top_k=search_data.top_k,
-    )
-    if not perception_events:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No matching perception events found")
-    return perception_events
+    return results

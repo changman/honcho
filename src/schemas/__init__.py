@@ -82,6 +82,12 @@ from src.schemas.internal import (
     SessionCounts,
     SessionPeerData,
 )
+from src.schemas.perception import (
+    PerceptionEventOut,
+    PerceptionEventResponse,
+    PerceptionIngestRequest,
+    PerceptionSearchRequest,
+)
 
 __all__ = [
     # configuration
@@ -148,6 +154,11 @@ __all__ = [
     "WorkspaceCreate",
     "WorkspaceGet",
     "WorkspaceUpdate",
+    # perception
+    "PerceptionEventOut",
+    "PerceptionEventResponse",
+    "PerceptionIngestRequest",
+    "PerceptionSearchRequest",
     # internal
     "DocumentBase",
     "DocumentCreate",

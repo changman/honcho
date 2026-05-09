@@ -1,3 +1,8 @@
+"""CRUD operations for Honcho.
+
+Re-exports all public names from submodules so that existing
+``from src.crud import X`` imports continue to work unchanged.
+"""
 from .collection import (
     get_collection,
     get_or_create_collection,
@@ -41,6 +46,12 @@ from .peer import (
     update_peer,
 )
 from .peer_card import get_peer_card, set_peer_card
+from .perception import (
+    create_perception_event,
+    get_associated_data,
+    get_perception_event,
+    search_perception_events,
+)
 from .representation import (
     get_working_representation,
 )
@@ -118,6 +129,11 @@ __all__ = [
     # Peer Card
     "get_peer_card",
     "set_peer_card",
+    # Perception
+    "create_perception_event",
+    "get_associated_data",
+    "get_perception_event",
+    "search_perception_events",
     # Representation
     "get_working_representation",
     # Session

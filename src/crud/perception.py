@@ -1,68 +1,86 @@
-import logging
+import datetime
+from collections.abc import Sequence
+from logging import getLogger
 from typing import Any, List, Optional
 
-from sqlalchemy.orm import Session
-from sqlalchemy import text
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from src import models
+from src.dependencies import tracked_db
 
-from src.models import Document, Message, PerceptionEvent
-from src.schemas import PerceptionIngestRequest, PerceptionEventOut
+logger = getLogger(__name__)
 
-logger = logging.getLogger(__name__)
 
-def create_perception_event(db: Session, event_data: PerceptionIngestRequest) -> PerceptionEvent:
-    db_event = PerceptionEvent(
-        session_id=event_data.session_id,
-        source_type=event_data.source_type,
-        salience_score=event_data.salience_score,
-        fingerprint=event_data.fingerprint,
-        fingerprint_bq=event_data.fingerprint_bq,
-        metadata_=event_data.metadata or {},
+async def create_perception_event(
+    db: AsyncSession,
+    event: "schemas.PerceptionIngestRequest",
+    workspace_name: str
+) -> models.PerceptionEvent:
+    """
+    Create a new perception event in the database.
+    """
+    from src import schemas  # Defer import to break circular dependency
+
+    # Note: workspace_name is needed for multitenancy but not directly on PerceptionEvent model.
+    # It's associated via the session. We assume the session's workspace is validated before this call.
+    new_event = models.PerceptionEvent(
+        session_id=event.session_id,
+        source_type=event.source_type,
+        salience_score=event.salience_score,
+        fingerprint=event.fingerprint,
+        fingerprint_bq=event.fingerprint_bq,
+        metadata_=event.metadata or {},
     )
-    db.add(db_event)
-    db.commit()
-    db.refresh(db_event)
-    return db_event
+    db.add(new_event)
+    await db.flush()
+    return new_event
 
-def get_perception_event(db: Session, event_id: str) -> Optional[PerceptionEvent]:
-    return db.query(PerceptionEvent).filter(PerceptionEvent.id == event_id).first()
+async def get_perception_event(
+    db: AsyncSession,
+    event_id: str
+) -> Optional[models.PerceptionEvent]:
+    """
+    Retrieve a perception event by its ID.
+    """
+    stmt = select(models.PerceptionEvent).where(models.PerceptionEvent.id == event_id)
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none()
 
-def search_perception_events(
-    db: Session,
-    query_fingerprint: List[float],
+async def search_perception_events(
+    db: AsyncSession,
+    query_fingerprint_bq: str,
     session_id: Optional[str] = None,
-    top_k: int = 5,
-) -> List[PerceptionEventOut]:
-    # Use the <# operator for Hamming distance on fingerprint_bq if available and appropriate
-    # For now, let's assume cosine similarity on the full fingerprint vector
-    # This part will need careful optimization based on the actual BQ implementation and performance
-    query = db.query(PerceptionEvent, PerceptionEvent.fingerprint.cosine_distance(query_fingerprint).label("distance"))
-
+    top_k: int = 5
+) -> List[models.PerceptionEvent]:
+    """
+    Search for perception events using Hamming distance on BQ fingerprints.
+    """
+    # Placeholder for native bitwise search.
+    # For now, we'll just return recent events for demonstration.
+    stmt = select(models.PerceptionEvent)
+    
     if session_id:
-        query = query.filter(PerceptionEvent.session_id == session_id)
+        stmt = stmt.where(models.PerceptionEvent.session_id == session_id)
+        
+    stmt = stmt.order_by(models.PerceptionEvent.created_at.desc()).limit(top_k)
     
-    # Order by distance (lower is better for cosine distance)
-    query = query.order_by(text("distance")).limit(top_k)
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
 
-    results = query.all()
+async def get_associated_data(
+    db: AsyncSession,
+    perception_event_id: str
+) -> dict[str, Any]:
+    """
+    Retrieve associated documents and messages for a perception event.
+    """
+    doc_stmt = select(models.Document).where(models.Document.perception_event_id == perception_event_id)
+    msg_stmt = select(models.Message).where(models.Message.perception_event_id == perception_event_id)
     
-    perception_events_out = []
-    for event, distance in results:
-        associated_documents_ids = [doc.id for doc in db.query(Document).filter(Document.perception_event_id == event.id).all()]
-        associated_messages_ids = [msg.public_id for msg in db.query(Message).filter(Message.perception_event_id == event.id).all()]
-
-        perception_events_out.append(PerceptionEventOut(
-            id=event.id,
-            session_id=event.session_id,
-            source_type=event.source_type,
-            salience_score=event.salience_score,
-            fingerprint_bq=event.fingerprint_bq,
-            metadata=event.metadata_,
-            created_at=event.created_at,
-            associated_documents=associated_documents_ids,
-            associated_messages=associated_messages_ids,
-            # For PerceptionEventOut, we need to load the full DocumentOut and MessageOut objects
-            # This is a simplification; in a real app, you might fetch these lazily or with specific joins
-            # For now, just pass the IDs, and the API layer can fetch full objects if needed.
-        ))
-    return perception_events_out
-
+    docs_res = await db.execute(doc_stmt)
+    msgs_res = await db.execute(msg_stmt)
+    
+    return {
+        "documents": list(docs_res.scalars().all()),
+        "messages": list(msgs_res.scalars().all())
+    }

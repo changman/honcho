@@ -468,7 +468,7 @@ def _fill_defaults_for_nested_field(
     """Fill missing keys in a partial nested dict from the field's defaults.
 
     When Pydantic's env_nested_delimiter splits an env var like
-    ``DERIVER_MODEL_CONFIG__THINKING_BUDGET_TOKENS=*** it produces
+    ``DERIVER_MODEL_CONFIG__THINKING_BUDGET_TOKENS=2048`` it produces
     ``{"MODEL_CONFIG": {"THINKING_BUDGET_TOKENS": 2048}}``.  Without merging
     that partial dict would fail validation because required keys like
     ``model`` and ``transport`` are missing.  This helper fills them from
@@ -721,7 +721,7 @@ class DeriverSettings(HonchoSettings):
         # _fill_defaults_for_nested_field and clobber intent.
         return ConfiguredModelSettings(
             transport="openai",
-            model="gpt-5.4-mini",
+            model="gpt-4-turbo",
         )
 
     MODEL_CONFIG: ConfiguredModelSettings = Field(default_factory=_MODEL_CONFIG_DEFAULT)
@@ -829,14 +829,14 @@ def _default_dialectic_levels() -> dict[ReasoningLevel, DialecticLevelSettings]:
     def _default_model_config() -> ConfiguredModelSettings:
         return ConfiguredModelSettings(
             transport="openai",
-            model="gpt-5.4-mini",
+            model="gpt-4-turbo",
         )
 
     return {
         "minimal": DialecticLevelSettings(
             MODEL_CONFIG=_default_model_config(),
             MAX_TOOL_ITERATIONS=1,
-            MAX_OUTPUT_TOKENS=***
+            MAX_OUTPUT_TOKENS=1024,
             TOOL_CHOICE="auto",
         ),
         "low": DialecticLevelSettings(
@@ -969,7 +969,7 @@ class SummarySettings(HonchoSettings):
         # Minimal default; extra knobs would merge into env/TOML overrides.
         return ConfiguredModelSettings(
             transport="openai",
-            model="gpt-5.4-mini",
+            model="gpt-4-turbo",
         )
 
     MODEL_CONFIG: ConfiguredModelSettings = Field(default_factory=_MODEL_CONFIG_DEFAULT)
@@ -1039,12 +1039,71 @@ class CacheSettings(HonchoSettings):
     model_config = SettingsConfigDict(env_prefix="CACHE_", extra="ignore")  # pyright: ignore
 
     ENABLED: bool = False
-    URL: str = "redis://localhost:***@staticmethod
+    URL: str = "redis://localhost:6379/0?suppress=true"
+    NAMESPACE: str | None = None
+    DEFAULT_TTL_SECONDS: Annotated[int, Field(default=300, ge=1, le=86_400)] = 300
+    DEFAULT_LOCK_TTL_SECONDS: Annotated[int, Field(default=5, ge=1, le=86_400)] = 5
+
+
+class ReconcilerSettings(HonchoSettings):
+    model_config = SettingsConfigDict(  # pyright: ignore
+        env_prefix="RECONCILER_", extra="ignore"
+    )
+
+    ENABLED: bool = True
+    WORKERS: int = 1
+    POLLING_INTERVAL: int = 5
+
+
+class SurprisalSettings(BaseModel):
+    """Settings for tree-based surprisal sampling during dreams."""
+
+    ENABLED: bool = False
+
+    # Tree configuration
+    TREE_TYPE: Literal[
+        "kdtree", "balltree", "rptree", "covertree", "lsh", "graph", "prototype"
+    ] = "kdtree"
+    TREE_K: Annotated[int, Field(default=5, gt=0, le=20)] = 5
+
+    # Sampling strategy
+    SAMPLING_STRATEGY: Literal["recent", "random", "all"] = "recent"
+    SAMPLE_SIZE: Annotated[int, Field(default=200, gt=0, le=2000)] = 200
+
+    # Surprisal filtering (normalized scores: 0.0 = lowest, 1.0 = highest)
+    TOP_PERCENT_SURPRISAL: Annotated[float, Field(default=0.10, gt=0.0, le=1.0)] = (
+        0.10  # Top 10% of observations
+    )
+    MIN_HIGH_SURPRISAL_FOR_REPLACE: Annotated[int, Field(default=10, gt=0)] = 10
+
+    # Observation level filtering
+    INCLUDE_LEVELS: list[str] = ["explicit", "deductive"]
+
+
+class DreamSettings(HonchoSettings):
+    model_config = SettingsConfigDict(  # pyright: ignore
+        env_prefix="DREAM_", env_nested_delimiter="__", extra="ignore"
+    )
+
+    ENABLED: bool = True
+    DOCUMENT_THRESHOLD: Annotated[int, Field(default=50, gt=0, le=1000)] = 50
+    IDLE_TIMEOUT_MINUTES: Annotated[int, Field(default=60, gt=0, le=1440)] = 60
+    MIN_HOURS_BETWEEN_DREAMS: Annotated[int, Field(default=8, gt=0, le=72)] = 8
+    ENABLED_TYPES: list[str] = ["omni"]
+
+    # Agent iteration limit
+    MAX_TOOL_ITERATIONS: Annotated[int, Field(default=20, gt=0, le=50)] = 20
+
+    # Token limit for get_recent_history tool within the agent
+    HISTORY_TOKEN_LIMIT: Annotated[int, Field(default=16_384, gt=0, le=200_000)] = (
+        16_384
+    )
+
+    @staticmethod
     def _DEDUCTION_MODEL_CONFIG_DEFAULT() -> ConfiguredModelSettings:
-        # Minimal default; extra knobs would merge into env/TOML overrides.
         return ConfiguredModelSettings(
             transport="openai",
-            model="gpt-5.4-mini",
+            model="gpt-4-turbo",
         )
 
     DEDUCTION_MODEL_CONFIG: ConfiguredModelSettings = Field(
@@ -1053,14 +1112,24 @@ class CacheSettings(HonchoSettings):
 
     @staticmethod
     def _INDUCTION_MODEL_CONFIG_DEFAULT() -> ConfiguredModelSettings:
-        # Minimal default; extra knobs would merge into env/TOML overrides.
         return ConfiguredModelSettings(
             transport="openai",
-            model="gpt-5.4-mini",
+            model="gpt-4-turbo",
         )
 
     INDUCTION_MODEL_CONFIG: ConfiguredModelSettings = Field(
         default_factory=_INDUCTION_MODEL_CONFIG_DEFAULT
+    )
+
+    @staticmethod
+    def _MULTIMODAL_INDUCTION_MODEL_CONFIG_DEFAULT() -> ConfiguredModelSettings:
+        return ConfiguredModelSettings(
+            transport="openai",
+            model="gpt-4-vision-preview",
+        )
+
+    MULTIMODAL_INDUCTION_MODEL_CONFIG: ConfiguredModelSettings = Field(
+        default_factory=_MULTIMODAL_INDUCTION_MODEL_CONFIG_DEFAULT
     )
 
     # Surprisal-based sampling subsystem
@@ -1081,6 +1150,11 @@ class CacheSettings(HonchoSettings):
                 "INDUCTION_MODEL_CONFIG",
                 cls._INDUCTION_MODEL_CONFIG_DEFAULT,
             )
+            _fill_defaults_for_nested_field(
+                typed_data,
+                "MULTIMODAL_INDUCTION_MODEL_CONFIG",
+                cls._MULTIMODAL_INDUCTION_MODEL_CONFIG_DEFAULT,
+            )
         return data  # pyright: ignore[reportUnknownVariableType]
 
     @model_validator(mode="after")
@@ -1089,6 +1163,7 @@ class CacheSettings(HonchoSettings):
         for name, cfg in (
             ("DEDUCTION_MODEL_CONFIG", self.DEDUCTION_MODEL_CONFIG),
             ("INDUCTION_MODEL_CONFIG", self.INDUCTION_MODEL_CONFIG),
+            ("MULTIMODAL_INDUCTION_MODEL_CONFIG", self.MULTIMODAL_INDUCTION_MODEL_CONFIG),
         ):
             if (
                 cfg.max_output_tokens is not None
@@ -1107,36 +1182,19 @@ class VectorStoreSettings(HonchoSettings):
 
     model_config = SettingsConfigDict(env_prefix="VECTOR_STORE_", extra="ignore")  # pyright: ignore
 
-    # Vector store type to use
     TYPE: Literal["pgvector", "turbopuffer", "lancedb"] = "pgvector"
-
     MIGRATED: bool = False
 
-    # Global namespace prefix for all vector namespaces
-    # Namespaces follow the pattern: {NAMESPACE}.{type}.{hash}
-    # where hash is a base64url-encoded SHA-256 of the workspace/peer names
-    # - Documents: {NAMESPACE}.doc.{hash(workspace, observer, observed)}
-    # - Messages: {NAMESPACE}.msg.{hash(workspace)}
     NAMESPACE: str = "honcho"
 
-    DIMENSIONS: Annotated[
-        int,
-        Field(
-            default=1536,
-            gt=0,
-        ),
-    ] = 1536
+    DIMENSIONS: Annotated[int, Field(default=1536, gt=0)] = 1536
 
-    # Turbopuffer-specific settings
     TURBOPUFFER_API_KEY: str | None = None
     TURBOPUFFER_REGION: str | None = None
 
-    # LanceDB-specific settings (local embedded mode)
     LANCEDB_PATH: str = "./lancedb_data"
 
-    RECONCILIATION_INTERVAL_SECONDS: Annotated[int, Field(default=300, gt=0)] = (
-        300  # 5 minutes
-    )
+    RECONCILIATION_INTERVAL_SECONDS: Annotated[int, Field(default=300, gt=0)] = 300
 
     @model_validator(mode="after")
     def _require_api_key_for_turbopuffer(self) -> "VectorStoreSettings":
@@ -1153,14 +1211,12 @@ class AppSettings(HonchoSettings):
         env_prefix="", env_nested_delimiter="__", extra="ignore"
     )
 
-    # Application-wide settings
     LOG_LEVEL: str = "INFO"
     SESSION_OBSERVERS_LIMIT: Annotated[int, Field(default=10, gt=0)] = 10
     MAX_FILE_SIZE: Annotated[int, Field(default=5_242_880, gt=0)] = 5_242_880  # 5MB
     GET_CONTEXT_MAX_TOKENS: Annotated[int, Field(default=100_000, gt=0, le=250_000)] = (
         100_000
     )
-
     MAX_MESSAGE_SIZE: Annotated[int, Field(default=25_000, gt=0)] = 25_000
     EMBED_MESSAGES: bool = True
     LANGFUSE_HOST: str | None = None
@@ -1168,9 +1224,9 @@ class AppSettings(HonchoSettings):
 
     COLLECT_METRICS_LOCAL: bool = False
     LOCAL_METRICS_FILE: str = "metrics.jsonl"
-    REASONING_TRACES_FILE: str | None = None  # Path to JSONL file for reasoning traces
+    REASONING_TRACES_FILE: str | None = None
 
-    NAMESPACE: str = "honcho"  # Top-level namespace for all settings, can be overridden by nested-model settings
+    NAMESPACE: str = "honcho"
 
     # Nested settings models
     DB: DBSettings = Field(default_factory=DBSettings)
@@ -1188,6 +1244,7 @@ class AppSettings(HonchoSettings):
     CACHE: CacheSettings = Field(default_factory=CacheSettings)
     DREAM: DreamSettings = Field(default_factory=DreamSettings)
     VECTOR_STORE: VectorStoreSettings = Field(default_factory=VectorStoreSettings)
+    RECONCILER: ReconcilerSettings = Field(default_factory=ReconcilerSettings)
 
     @field_validator("LOG_LEVEL")
     def validate_log_level(cls, v: str) -> str:
@@ -1225,5 +1282,5 @@ class AppSettings(HonchoSettings):
         return self
 
 
-# Create a single global instance of the settings
+# Single global settings instance
 settings: AppSettings = AppSettings()
