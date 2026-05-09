@@ -351,3 +351,169 @@ class TestSearchPerception:
         score = results[0]["similarity_score"]
         assert score is not None
         assert 0.0 <= score <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: Key-frame interleaving + stream segmentation
+# ---------------------------------------------------------------------------
+
+class TestKeyFrameInterleaving:
+    """Key-frame interleaving: skip full vector for near-duplicate frames."""
+
+    def _ingest(
+        self,
+        client: TestClient,
+        ws: str,
+        sid: str,
+        fingerprint: list[float],
+        **extra: Any,
+    ) -> dict:
+        payload = {
+            "session_id": sid,
+            "source_type": "video_1fps",
+            "salience_score": 0.5,
+            "fingerprint": fingerprint,
+            **extra,
+        }
+        resp = client.post(
+            f"/v1/workspaces/{ws}/sessions/{sid}/perception/ingest",
+            json=payload,
+        )
+        assert resp.status_code == 201, resp.text
+        return resp.json()
+
+    def test_first_event_always_accepted(
+        self,
+        client: TestClient,
+        workspace_and_session: tuple[str, str],
+    ):
+        """First frame in session is always ingested (no prior to compare)."""
+        ws, sid = workspace_and_session
+        resp = self._ingest(client, ws, sid, _make_fingerprint(seed=90))
+        assert resp["id"] is not None
+
+    def test_identical_frame_is_still_ingested(
+        self,
+        client: TestClient,
+        workspace_and_session: tuple[str, str],
+    ):
+        """Even near-duplicate frames are ingested — just without the full vector.
+        The event still gets a valid ID and is searchable via BQ."""
+        ws, sid = workspace_and_session
+        fp = _make_fingerprint(seed=91)
+        self._ingest(client, ws, sid, fp)
+        resp2 = self._ingest(client, ws, sid, fp)
+        assert resp2["id"] is not None
+
+    def test_significantly_different_frame_accepted(
+        self,
+        client: TestClient,
+        workspace_and_session: tuple[str, str],
+    ):
+        """Frame with large cosine distance from previous is accepted."""
+        ws, sid = workspace_and_session
+        fp_a = _make_fingerprint(seed=92)
+        fp_b = _make_opposite_fingerprint(fp_a)
+        self._ingest(client, ws, sid, fp_a)
+        resp2 = self._ingest(client, ws, sid, fp_b)
+        assert resp2["id"] is not None
+
+
+class TestStreamSegmentation:
+    """Stream segmentation: captured_at, segment_id, is_segment_start/end."""
+
+    def _ingest(
+        self,
+        client: TestClient,
+        ws: str,
+        sid: str,
+        fingerprint: list[float],
+        **extra: Any,
+    ) -> dict:
+        payload = {
+            "session_id": sid,
+            "source_type": "video_1fps",
+            "salience_score": 0.5,
+            "fingerprint": fingerprint,
+            **extra,
+        }
+        resp = client.post(
+            f"/v1/workspaces/{ws}/sessions/{sid}/perception/ingest",
+            json=payload,
+        )
+        assert resp.status_code == 201, resp.text
+        return resp.json()
+
+    def test_ingest_with_segment_fields(
+        self,
+        client: TestClient,
+        workspace_and_session: tuple[str, str],
+    ):
+        """Segment metadata is stored and echoed back in the response."""
+        ws, sid = workspace_and_session
+        import datetime
+
+        captured = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        resp = self._ingest(
+            client, ws, sid,
+            _make_fingerprint(seed=100),
+            captured_at=captured,
+            segment_id="seg-abc",
+            is_segment_start=True,
+            is_segment_end=False,
+        )
+        assert resp["segment_id"] == "seg-abc"
+        assert resp["is_segment_start"] is True
+        assert resp["is_segment_end"] is False
+        assert resp["captured_at"] is not None
+
+    def test_ingest_segment_end_event(
+        self,
+        client: TestClient,
+        workspace_and_session: tuple[str, str],
+    ):
+        ws, sid = workspace_and_session
+        resp = self._ingest(
+            client, ws, sid,
+            _make_fingerprint(seed=101),
+            segment_id="seg-xyz",
+            is_segment_end=True,
+        )
+        assert resp["is_segment_end"] is True
+        assert resp["segment_id"] == "seg-xyz"
+
+    def test_search_result_includes_segment_fields(
+        self,
+        client: TestClient,
+        workspace_and_session: tuple[str, str],
+    ):
+        """Search results should include segment metadata."""
+        ws, sid = workspace_and_session
+        fp = _make_fingerprint(seed=102)
+        self._ingest(
+            client, ws, sid, fp,
+            segment_id="seg-search-test",
+            is_segment_start=True,
+        )
+        resp = client.post(
+            f"/v1/workspaces/{ws}/sessions/{sid}/perception/search",
+            json={"query_fingerprint": fp, "top_k": 1},
+        )
+        assert resp.status_code == 200
+        results = resp.json()
+        assert len(results) == 1
+        assert results[0]["segment_id"] == "seg-search-test"
+        assert results[0]["is_segment_start"] is True
+
+    def test_ingest_without_segment_fields_defaults(
+        self,
+        client: TestClient,
+        workspace_and_session: tuple[str, str],
+    ):
+        """Optional segment fields default gracefully when omitted."""
+        ws, sid = workspace_and_session
+        resp = self._ingest(client, ws, sid, _make_fingerprint(seed=103))
+        assert resp["segment_id"] is None
+        assert resp["captured_at"] is None
+        assert resp["is_segment_start"] is False
+        assert resp["is_segment_end"] is False

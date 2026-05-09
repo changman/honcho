@@ -30,27 +30,44 @@ async def ingest_perception(
 ):
     """Ingest a new perception event (image/audio fingerprint).
 
-    If the request includes a raw float fingerprint but no fingerprint_bq,
-    the BQ string is computed automatically.
+    Key-frame interleaving: if the new fingerprint is within 5% cosine distance
+    of the most recent stored fingerprint, only the BQ string is persisted
+    (not the full 512d vector), saving ~2KB per near-duplicate frame.
 
-    Returns the created event, plus an is_state_change flag comparing it
-    against the most recent event in the same session.
+    State-change detection: compares the new BQ fingerprint against recent
+    events in the session and sets is_state_change=True when visual similarity
+    drops below 0.90.
     """
     if event.session_id != session_id:
         raise HTTPException(status_code=400, detail="session_id in body does not match URL")
 
-    # Auto-compute BQ if caller sent the raw float fingerprint
+    # Auto-compute BQ from float fingerprint if not provided
     if event.fingerprint and not event.fingerprint_bq:
         event = event.model_copy(update={"fingerprint_bq": float_to_bq(event.fingerprint)})
 
-    # State-change detection before persisting
+    # State-change detection (runs before persist — no extra DB round-trip)
     is_state_change = False
     if event.fingerprint_bq:
         _, is_state_change = await crud.find_or_flag_state_change(
             db, session_id=session_id, new_fingerprint_bq=event.fingerprint_bq
         )
 
-    new_event = await crud.create_perception_event(db, event=event, workspace_name=workspace_id)
+    # Key-frame interleaving: skip full vector storage for near-duplicate frames
+    store_full = True
+    if event.fingerprint:
+        store_full = await crud.should_store_full_fingerprint(
+            db, session_id=session_id, new_fingerprint=event.fingerprint
+        )
+
+    new_event = await crud.create_perception_event(
+        db, event=event, workspace_name=workspace_id, store_full_fingerprint=store_full
+    )
+
+    if not store_full:
+        logger.debug(
+            "Key-frame interleaving: skipped full vector for event %s (near-duplicate)",
+            new_event.id,
+        )
 
     # High-salience events will trigger background reasoning in Phase 4
     # if event.salience_score > 0.7:
@@ -70,7 +87,7 @@ async def search_perception(
     """Search for perception events by visual fingerprint similarity.
 
     Converts the float query_fingerprint to a BQ binary string, then ranks
-    stored events by Hamming distance (lower distance = higher similarity).
+    stored events by Hamming distance. Results include similarity_score (0–1).
     """
     query_bq = float_to_bq(request.query_fingerprint)
 
@@ -93,6 +110,10 @@ async def search_perception(
                 fingerprint_bq=event.fingerprint_bq,
                 metadata=event.metadata_,
                 created_at=event.created_at,
+                captured_at=event.captured_at,
+                segment_id=event.segment_id,
+                is_segment_start=event.is_segment_start,
+                is_segment_end=event.is_segment_end,
                 similarity_score=round(similarity, 4),
                 associated_document_ids=[d.id for d in associated["documents"]],
                 associated_message_ids=[m.public_id for m in associated["messages"]],

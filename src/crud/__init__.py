@@ -48,9 +48,13 @@ from .peer import (
 from .peer_card import get_peer_card, set_peer_card
 from .perception import (
     create_perception_event,
+    find_or_flag_state_change,
     get_associated_data,
+    get_events_in_segment,
     get_perception_event,
+    prune_perception_event_fingerprint,
     search_perception_events,
+    should_store_full_fingerprint,
 )
 from .representation import (
     get_working_representation,
@@ -131,9 +135,13 @@ __all__ = [
     "set_peer_card",
     # Perception
     "create_perception_event",
+    "find_or_flag_state_change",
     "get_associated_data",
+    "get_events_in_segment",
     "get_perception_event",
+    "prune_perception_event_fingerprint",
     "search_perception_events",
+    "should_store_full_fingerprint",
     # Representation
     "get_working_representation",
     # Session

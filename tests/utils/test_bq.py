@@ -133,3 +133,45 @@ class TestRankByHamming:
 
     def test_empty_candidates_returns_empty(self):
         assert rank_by_hamming(float_to_bq(_vec(34)), [], top_k=5) == []
+
+
+# ---------------------------------------------------------------------------
+# Cosine distance (key-frame interleaving helper)
+# ---------------------------------------------------------------------------
+
+class TestCosineDistance:
+    """Tests for src/crud/perception._cosine_distance."""
+
+    # Import here to keep test file independent of DB fixtures
+    from src.crud.perception import _cosine_distance as _cd
+
+    def test_identical_vectors_distance_is_zero(self):
+        from src.crud.perception import _cosine_distance
+        v = [1.0] * 512
+        assert _cosine_distance(v, v) < 1e-9
+
+    def test_orthogonal_vectors_distance_is_1(self):
+        from src.crud.perception import _cosine_distance
+        a = [1.0] + [0.0] * 511
+        b = [0.0, 1.0] + [0.0] * 510
+        assert abs(_cosine_distance(a, b) - 1.0) < 1e-9
+
+    def test_opposite_vectors_distance_is_2(self):
+        from src.crud.perception import _cosine_distance
+        v = [1.0] * 512
+        opp = [-1.0] * 512
+        assert abs(_cosine_distance(v, opp) - 2.0) < 1e-9
+
+    def test_similar_vectors_small_distance(self):
+        from src.crud.perception import _cosine_distance
+        rng = random.Random(99)
+        v = [rng.random() for _ in range(512)]
+        # Tiny perturbation → distance should be well below 0.05 threshold
+        noise = [x + rng.gauss(0, 0.001) for x in v]
+        assert _cosine_distance(v, noise) < 0.05
+
+    def test_zero_vector_returns_1(self):
+        from src.crud.perception import _cosine_distance
+        zeros = [0.0] * 512
+        v = _vec(100)
+        assert _cosine_distance(zeros, v) == 1.0

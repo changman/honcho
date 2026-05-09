@@ -352,6 +352,21 @@ class PerceptionEvent(Base):
         DateTime(timezone=True), server_default=func.now(), index=True
     )
 
+    # Stream segmentation fields (Phase 2)
+    # captured_at: the actual wall-clock time of the sensory capture (may differ
+    # from created_at if ingestion is batched / delayed).
+    captured_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    # segment_id: groups frames that belong to the same continuous VAD/motion segment.
+    segment_id: Mapped[str | None] = mapped_column(TEXT, nullable=True, index=True)
+    is_segment_start: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    is_segment_end: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+
     session = relationship("Session", back_populates="perception_events")
 
     __table_args__ = (

@@ -14,6 +14,12 @@ class PerceptionIngestRequest(BaseModel):
     fingerprint_bq: str | None = None
     metadata: dict[str, Any] | None = None
 
+    # Stream segmentation fields (Phase 2)
+    captured_at: datetime.datetime | None = None
+    segment_id: str | None = None
+    is_segment_start: bool = False
+    is_segment_end: bool = False
+
 
 class PerceptionSearchRequest(BaseModel):
     query_fingerprint: list[float] = Field(min_length=512, max_length=512)
@@ -32,6 +38,12 @@ class PerceptionEventResponse(BaseModel):
     metadata: dict[str, Any] | None = None
     created_at: datetime.datetime
     is_state_change: bool = False
+
+    # Stream segmentation (echoed back)
+    captured_at: datetime.datetime | None = None
+    segment_id: str | None = None
+    is_segment_start: bool = False
+    is_segment_end: bool = False
 
 
 class PerceptionEventOut(PerceptionEventResponse):
