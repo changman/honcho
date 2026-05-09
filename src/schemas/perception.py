@@ -31,8 +31,10 @@ class PerceptionEventResponse(BaseModel):
     fingerprint_bq: str | None = None
     metadata: dict[str, Any] | None = None
     created_at: datetime.datetime
+    is_state_change: bool = False
 
 
 class PerceptionEventOut(PerceptionEventResponse):
+    similarity_score: float | None = None
     associated_document_ids: list[str] = Field(default_factory=list)
     associated_message_ids: list[str] = Field(default_factory=list)
