@@ -31,6 +31,7 @@ from src.telemetry.prometheus.metrics import TokenTypes
 from src.utils.agent_tools import (
     DEDUCTION_SPECIALIST_TOOLS,
     INDUCTION_SPECIALIST_TOOLS,
+    MULTIMODAL_INDUCTION_SPECIALIST_TOOLS,
     create_tool_executor,
 )
 
@@ -598,25 +599,17 @@ class MultimodalInductionSpecialist(BaseSpecialist):
     peer_card_update_instruction: str = "Focus on synthesizing perception events into higher-level insights. Do not update peer card with transient sensory data."
 
     def get_tools(self, *, peer_card_enabled: bool = True) -> list[dict[str, Any]]:
-        multimodal_tools = [
-            *INDUCTION_SPECIALIST_TOOLS, # Include existing induction tools
-            # Placeholder for new tools related to multimodal perception
-            # For example:
-            # {"name": "search_perception_events", "description": "Search for perception events based on sensory fingerprints."},
-            # {"name": "create_perception_event", "description": "Create a new perception event after synthesizing lower-level events."},
-            # {"name": "update_perception_event_fingerprint", "description": "Update a perception event by setting its raw fingerprint to NULL for pruning."},
-        ]
         if peer_card_enabled:
-            return multimodal_tools
+            return MULTIMODAL_INDUCTION_SPECIALIST_TOOLS
         return [
             t
-            for t in multimodal_tools
+            for t in MULTIMODAL_INDUCTION_SPECIALIST_TOOLS
             if t["name"] not in PEER_CARD_TOOL_NAMES
         ]
 
     def get_model_config(self) -> ConfiguredModelSettings:
         return _require_specialist_model_config(
-            settings.DREAM.MULTIMODAL_INDUCTION_MODEL_CONFIG, # This config needs to be added in src/config.py
+            settings.DREAM.MULTIMODAL_INDUCTION_MODEL_CONFIG,
             specialist_name="DREAM MULTIMODAL INDUCTION",
         )
 

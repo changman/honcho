@@ -63,6 +63,9 @@ class DreamResult:
     input_tokens: int
     output_tokens: int
 
+    # Phase 3 outcome (optional — False when multimodal_induction is not in ENABLED_TYPES)
+    multimodal_induction_success: bool = False
+
 
 async def run_dream(
     workspace_name: str,
@@ -117,9 +120,11 @@ async def run_dream(
     # Track specialist outcomes
     deduction_success = False
     induction_success = False
+    multimodal_induction_success = False
     surprisal_observation_count = 0
     deduction_result: SpecialistResult | None = None
     induction_result: SpecialistResult | None = None
+    multimodal_result: SpecialistResult | None = None
 
     # Phase 0: Surprisal-based sampling (if enabled)
     # Specialists are self-directed by default - hints are optional suggestions
@@ -213,6 +218,50 @@ async def run_dream(
         logger.error(f"[{run_id}] Induction specialist failed: {e}", exc_info=True)
         accumulate_metric(task_name, "induction_error", str(e), "blob")
 
+    # Phase 3: Multimodal induction (runs when perception events exist for the session)
+    if "multimodal_induction" in settings.DREAM.ENABLED_TYPES and session_name:
+        logger.info(f"[{run_id}] Phase 3: Checking for perception events")
+        has_perception_events = False
+        try:
+            async with tracked_db("dream.check_perception_events") as db:
+                from src.crud.session import get_session as _get_session
+                from src.crud.perception import search_perception_events as _spe
+                _session = await _get_session(
+                    db, session_name=session_name, workspace_name=workspace_name
+                )
+                _events = await _spe(db, query_fingerprint_bq=None, session_id=_session.id, top_k=1)
+                has_perception_events = len(_events) > 0
+        except Exception as _e:
+            logger.warning(f"[{run_id}] Could not check perception events: {_e}")
+
+        if has_perception_events:
+            logger.info(f"[{run_id}] Phase 3: Running multimodal induction specialist")
+            multimodal_specialist = SPECIALISTS["multimodal_induction"]
+            try:
+                multimodal_result = await multimodal_specialist.run(
+                    workspace_name=workspace_name,
+                    observer=observer,
+                    observed=observed,
+                    session_name=session_name,
+                    hints=None,
+                    configuration=configuration,
+                    parent_run_id=run_id,
+                )
+                logger.info(
+                    f"[{run_id}] Multimodal induction completed: {multimodal_result.content[:200]}..."
+                )
+                accumulate_metric(
+                    task_name, "multimodal_induction_result", multimodal_result.content, "blob"
+                )
+                multimodal_induction_success = multimodal_result.success
+            except SpecialistExecutionError as e:
+                logger.error(
+                    f"[{run_id}] Multimodal induction specialist failed: {e}", exc_info=True
+                )
+                accumulate_metric(task_name, "multimodal_induction_error", str(e), "blob")
+        else:
+            logger.info(f"[{run_id}] Phase 3: No perception events — skipping multimodal induction")
+
     # Log final metrics
     duration_ms = (time.perf_counter() - start_time) * 1000
     accumulate_metric(task_name, "total_duration", duration_ms, "ms")
@@ -220,16 +269,26 @@ async def run_dream(
     logger.info(f"[{run_id}] Dream cycle completed in {duration_ms:.0f}ms")
     log_performance_metrics("dream_orchestrator", run_id)
 
+    specialists_run = ["deduction", "induction"]
+    if multimodal_result is not None:
+        specialists_run.append("multimodal_induction")
+
     # Aggregate metrics from specialist results
-    total_iterations = (deduction_result.iterations if deduction_result else 0) + (
-        induction_result.iterations if induction_result else 0
+    total_iterations = (
+        (deduction_result.iterations if deduction_result else 0)
+        + (induction_result.iterations if induction_result else 0)
+        + (multimodal_result.iterations if multimodal_result else 0)
     )
-    total_input_tokens = (deduction_result.input_tokens if deduction_result else 0) + (
-        induction_result.input_tokens if induction_result else 0
+    total_input_tokens = (
+        (deduction_result.input_tokens if deduction_result else 0)
+        + (induction_result.input_tokens if induction_result else 0)
+        + (multimodal_result.input_tokens if multimodal_result else 0)
     )
     total_output_tokens = (
-        deduction_result.output_tokens if deduction_result else 0
-    ) + (induction_result.output_tokens if induction_result else 0)
+        (deduction_result.output_tokens if deduction_result else 0)
+        + (induction_result.output_tokens if induction_result else 0)
+        + (multimodal_result.output_tokens if multimodal_result else 0)
+    )
 
     # Emit DreamRunEvent with aggregated metrics
     emit(
@@ -239,7 +298,7 @@ async def run_dream(
             session_name=session_name,
             observer=observer,
             observed=observed,
-            specialists_run=["deduction", "induction"],
+            specialists_run=specialists_run,
             deduction_success=deduction_success,
             induction_success=induction_success,
             surprisal_enabled=settings.DREAM.SURPRISAL.ENABLED,
@@ -253,9 +312,10 @@ async def run_dream(
 
     return DreamResult(
         run_id=run_id,
-        specialists_run=["deduction", "induction"],
+        specialists_run=specialists_run,
         deduction_success=deduction_success,
         induction_success=induction_success,
+        multimodal_induction_success=multimodal_induction_success,
         surprisal_enabled=settings.DREAM.SURPRISAL.ENABLED,
         surprisal_conclusion_count=surprisal_observation_count,
         total_iterations=total_iterations,

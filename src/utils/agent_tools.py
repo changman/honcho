@@ -776,6 +776,82 @@ INDUCTION_SPECIALIST_TOOLS: list[dict[str, Any]] = [
     TOOLS["update_peer_card"],
 ]
 
+# Tools for the multimodal induction specialist (Phase 3)
+# Synthesizes raw perception events (images, audio, video) into higher-level observations.
+# Inherits text-memory tools from induction, plus three perception-specific tools.
+MULTIMODAL_INDUCTION_SPECIALIST_TOOLS: list[dict[str, Any]] = [
+    # Text-memory discovery (same as induction)
+    TOOLS["get_recent_observations"],
+    TOOLS["search_memory"],
+    # Perception discovery
+    {
+        "name": "get_recent_perception_events",
+        "description": (
+            "List the most recently ingested perception events for the current session. "
+            "Returns event summaries including ID, source_type, salience_score, "
+            "segment_id, and metadata. Use this as the starting point to identify "
+            "what sensory data has been captured."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "description": "Max events to return (1–50). Default: 20.",
+                    "default": 20,
+                }
+            },
+        },
+    },
+    {
+        "name": "search_perception_events",
+        "description": (
+            "Find perception events visually similar to a reference event, "
+            "using BQ Hamming distance. Provide a reference_event_id obtained "
+            "from get_recent_perception_events; the tool searches for other events "
+            "with similar visual fingerprints in the same session."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "reference_event_id": {
+                    "type": "string",
+                    "description": "ID of a known perception event to use as the visual query anchor.",
+                },
+                "top_k": {
+                    "type": "integer",
+                    "description": "Max results to return. Default: 5.",
+                    "default": 5,
+                },
+            },
+            "required": ["reference_event_id"],
+        },
+    },
+    # Synthesis (text observations)
+    TOOLS["create_observations_inductive"],
+    # Pruning: free full-vector storage after synthesis
+    {
+        "name": "prune_perception_event_fingerprint",
+        "description": (
+            "Remove the full float fingerprint from a perception event while keeping "
+            "its BQ fingerprint (binary search index). Call this ONLY after you have "
+            "successfully synthesized the event into a higher-level observation. "
+            "The event remains searchable via BQ Hamming distance after pruning."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "event_id": {
+                    "type": "string",
+                    "description": "ID of the perception event to prune.",
+                }
+            },
+            "required": ["event_id"],
+        },
+    },
+    TOOLS["update_peer_card"],
+]
+
 
 async def create_observations(
     observations: list[schemas.ObservationInput],
@@ -2018,6 +2094,131 @@ async def _handle_get_reasoning_chain(
     return "\n".join(output_parts)
 
 
+# ---------------------------------------------------------------------------
+# Multimodal perception tool handlers (Phase 3)
+# ---------------------------------------------------------------------------
+
+async def _handle_get_recent_perception_events(
+    ctx: ToolContext, tool_input: dict[str, Any]
+) -> str:
+    """Return a formatted list of recent perception events for the session."""
+    limit = min(int(tool_input.get("limit", 20)), 50)
+
+    if not ctx.session_name:
+        return "No active session — cannot retrieve perception events."
+
+    async with tracked_db("tool.get_recent_perception_events") as db:
+        from src.crud.session import get_session
+        from src.crud.perception import search_perception_events
+
+        try:
+            session = await get_session(
+                db, session_name=ctx.session_name, workspace_name=ctx.workspace_name
+            )
+        except Exception:
+            return f"Session '{ctx.session_name}' not found."
+
+        # No BQ query → returns most recent events (recency fallback)
+        results = await search_perception_events(
+            db,
+            query_fingerprint_bq=None,
+            session_id=session.id,
+            top_k=limit,
+        )
+
+    if not results:
+        return "No perception events found for this session."
+
+    lines = ["**Recent Perception Events:**\n"]
+    for event, _ in results:
+        meta_str = ""
+        if event.metadata_:
+            meta_str = f" | metadata: {dict(list(event.metadata_.items())[:3])}"
+        seg_str = f" | segment: {event.segment_id}" if event.segment_id else ""
+        lines.append(
+            f"- **{event.id}** | {event.source_type} | salience={event.salience_score:.2f}"
+            f" | {event.created_at.strftime('%H:%M:%S')}{seg_str}{meta_str}"
+        )
+
+    return "\n".join(lines)
+
+
+async def _handle_search_perception_events(
+    ctx: ToolContext, tool_input: dict[str, Any]
+) -> str:
+    """Find perception events visually similar to a reference event via BQ Hamming."""
+    reference_id: str = tool_input.get("reference_event_id", "")
+    top_k = int(tool_input.get("top_k", 5))
+
+    if not reference_id:
+        return "reference_event_id is required."
+    if not ctx.session_name:
+        return "No active session — cannot search perception events."
+
+    async with tracked_db("tool.search_perception_events") as db:
+        from src.crud.session import get_session
+        from src.crud.perception import get_perception_event, search_perception_events
+
+        try:
+            session = await get_session(
+                db, session_name=ctx.session_name, workspace_name=ctx.workspace_name
+            )
+        except Exception:
+            return f"Session '{ctx.session_name}' not found."
+
+        ref = await get_perception_event(db, reference_id)
+        if ref is None:
+            return f"Perception event '{reference_id}' not found."
+        if not ref.fingerprint_bq:
+            return (
+                f"Perception event '{reference_id}' has no BQ fingerprint — "
+                "it may have been pruned or not stored with a fingerprint."
+            )
+
+        results = await search_perception_events(
+            db,
+            query_fingerprint_bq=ref.fingerprint_bq,
+            session_id=session.id,
+            top_k=top_k + 1,  # +1 to exclude the reference itself
+        )
+
+    # Exclude the reference event from results
+    results = [(e, s) for e, s in results if e.id != reference_id][:top_k]
+
+    if not results:
+        return f"No similar perception events found near event '{reference_id}'."
+
+    lines = [f"**Events similar to {reference_id}:**\n"]
+    for event, similarity in results:
+        lines.append(
+            f"- **{event.id}** | similarity={similarity:.3f} | "
+            f"{event.source_type} | salience={event.salience_score:.2f} | "
+            f"{event.created_at.strftime('%H:%M:%S')}"
+        )
+    return "\n".join(lines)
+
+
+async def _handle_prune_perception_event_fingerprint(
+    ctx: ToolContext, tool_input: dict[str, Any]
+) -> str:
+    """Prune the full float fingerprint from a perception event, keeping its BQ."""
+    event_id: str = tool_input.get("event_id", "")
+    if not event_id:
+        return "event_id is required."
+
+    async with tracked_db("tool.prune_perception_event_fingerprint") as db:
+        from src.crud.perception import prune_perception_event_fingerprint
+
+        result = await prune_perception_event_fingerprint(db, event_id)
+        if result is None:
+            return f"Perception event '{event_id}' not found — nothing pruned."
+
+    return (
+        f"Pruned full fingerprint from perception event '{event_id}'. "
+        "BQ fingerprint retained for continued search."
+    )
+
+
 # Tool handler dispatch table
 _TOOL_HANDLERS: dict[str, Callable[[ToolContext, dict[str, Any]], Any]] = {
     "create_observations": _handle_create_observations,
@@ -2039,6 +2240,10 @@ _TOOL_HANDLERS: dict[str, Callable[[ToolContext, dict[str, Any]], Any]] = {
     "finish_consolidation": _handle_finish_consolidation,
     "extract_preferences": _handle_extract_preferences,
     "get_reasoning_chain": _handle_get_reasoning_chain,
+    # Multimodal perception tools (Phase 3)
+    "get_recent_perception_events": _handle_get_recent_perception_events,
+    "search_perception_events": _handle_search_perception_events,
+    "prune_perception_event_fingerprint": _handle_prune_perception_event_fingerprint,
 }
 
 
