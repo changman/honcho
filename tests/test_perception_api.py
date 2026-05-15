@@ -47,7 +47,11 @@ async def workspace_and_session(
     db_session: AsyncSession,
     sample_data: tuple[models.Workspace, models.Peer],
 ) -> tuple[str, str]:
-    """Create a Session and return (workspace_name, session_id)."""
+    """Create a Session and return (workspace_name, session_name).
+
+    URL path params in Honcho use session names, not internal UUIDs.
+    The router resolves name → UUID before FK insertion.
+    """
     workspace, _peer = sample_data
     session = models.Session(
         name="perception-test-session",
@@ -55,7 +59,7 @@ async def workspace_and_session(
     )
     db_session.add(session)
     await db_session.commit()
-    return workspace.name, session.id
+    return workspace.name, session.name
 
 
 # ---------------------------------------------------------------------------
@@ -115,18 +119,18 @@ class TestIngestPerception:
         assert search_resp.status_code == 200, search_resp.text
         assert any(h["id"] == event_id for h in search_resp.json())
 
-    def test_ingest_session_mismatch_returns_400(
+    def test_ingest_unknown_session_returns_404(
         self,
         client: TestClient,
         workspace_and_session: tuple[str, str],
     ):
-        ws, sid = workspace_and_session
-        payload = self._ingest_payload("different-session-id")
+        ws, _sid = workspace_and_session
+        payload = self._ingest_payload("no-such-session")
         resp = client.post(
-            f"/v1/workspaces/{ws}/sessions/{sid}/perception/ingest",
+            f"/v1/workspaces/{ws}/sessions/no-such-session/perception/ingest",
             json=payload,
         )
-        assert resp.status_code == 400
+        assert resp.status_code == 404
 
     def test_ingest_missing_required_fields_returns_422(
         self,

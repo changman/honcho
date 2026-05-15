@@ -34,7 +34,7 @@ from src.schemas.configuration import (
 # Metadata validation helpers
 # ---------------------------------------------------------------------------
 
-RESOURCE_NAME_PATTERN = r"^[a-zA-Z0-9_-]+$"
+RESOURCE_NAME_PATTERN = r"^[\w-]+$"
 
 _METADATA_MAX_KEYS = 100
 _METADATA_MAX_DEPTH = 5

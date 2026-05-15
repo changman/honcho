@@ -213,6 +213,7 @@ async def get_or_create_session(
         try:
             async with db.begin_nested():
                 db.add(honcho_session)
+                await db.flush()  # emit INSERT before session_peers FK check
             needs_cache_update = True
             created = True
 

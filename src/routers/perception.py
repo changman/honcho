@@ -1,7 +1,7 @@
 import logging
 from typing import List
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path
+from fastapi import APIRouter, BackgroundTasks, Depends, Path
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src import crud, schemas
@@ -38,8 +38,9 @@ async def ingest_perception(
     events in the session and sets is_state_change=True when visual similarity
     drops below 0.90.
     """
-    if event.session_id != session_id:
-        raise HTTPException(status_code=400, detail="session_id in body does not match URL")
+    # Resolve session name → internal UUID (perception_events FK references sessions.id)
+    session = await crud.get_session(db, session_name=session_id, workspace_name=workspace_id)
+    internal_session_id = session.id
 
     # Auto-compute BQ from float fingerprint if not provided
     if event.fingerprint and not event.fingerprint_bq:
@@ -49,16 +50,17 @@ async def ingest_perception(
     is_state_change = False
     if event.fingerprint_bq:
         _, is_state_change = await crud.find_or_flag_state_change(
-            db, session_id=session_id, new_fingerprint_bq=event.fingerprint_bq
+            db, session_id=internal_session_id, new_fingerprint_bq=event.fingerprint_bq
         )
 
     # Key-frame interleaving: skip full vector storage for near-duplicate frames
     store_full = True
     if event.fingerprint:
         store_full = await crud.should_store_full_fingerprint(
-            db, session_id=session_id, new_fingerprint=event.fingerprint
+            db, session_id=internal_session_id, new_fingerprint=event.fingerprint
         )
 
+    event = event.model_copy(update={"session_id": internal_session_id})
     new_event = await crud.create_perception_event(
         db, event=event, workspace_name=workspace_id, store_full_fingerprint=store_full
     )
@@ -75,7 +77,7 @@ async def ingest_perception(
 
     return schemas.PerceptionEventResponse(
         id=new_event.id,
-        session_id=new_event.session_id,
+        session_id=session_id,  # return session name (URL param), not internal UUID
         source_type=new_event.source_type,
         salience_score=new_event.salience_score,
         fingerprint_bq=new_event.fingerprint_bq,
@@ -101,12 +103,15 @@ async def search_perception(
     Converts the float query_fingerprint to a BQ binary string, then ranks
     stored events by Hamming distance. Results include similarity_score (0–1).
     """
+    session = await crud.get_session(db, session_name=session_id, workspace_name=workspace_id)
+    internal_session_id = session.id
+
     query_bq = float_to_bq(request.query_fingerprint)
 
     ranked = await crud.search_perception_events(
         db,
         query_fingerprint_bq=query_bq,
-        session_id=session_id,
+        session_id=internal_session_id,
         top_k=request.top_k,
     )
 
@@ -116,7 +121,7 @@ async def search_perception(
         results.append(
             schemas.PerceptionEventOut(
                 id=event.id,
-                session_id=event.session_id,
+                session_id=session_id,  # return session name, not internal UUID
                 source_type=event.source_type,
                 salience_score=event.salience_score,
                 fingerprint_bq=event.fingerprint_bq,

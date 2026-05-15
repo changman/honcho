@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class PerceptionIngestRequest(BaseModel):
-    session_id: str
+    session_id: str | None = None  # ignored; session resolved from URL path
     source_type: Literal["video_1fps", "audio_vad", "remote_stream"]
     salience_score: float = Field(ge=0.0, le=1.0)
     fingerprint: list[float] | None = Field(default=None, min_length=512, max_length=512)
